@@ -45,8 +45,9 @@ async def health() -> JSONResponse:
 @app.websocket("/ws/live")
 async def live_session(websocket: WebSocket) -> None:
     await websocket.accept()
-    session_task: asyncio.Task | None = None
     gemini_session: GeminiLiveSession | None = None
+    run_task: asyncio.Task | None = None
+    output_task: asyncio.Task | None = None
 
     try:
         while True:
@@ -87,8 +88,11 @@ async def live_session(websocket: WebSocket) -> None:
                 )
                 gemini_session = GeminiLiveSession(settings, options)
                 await gemini_session.connect()
-                session_task = asyncio.create_task(
-                    _stream_gemini_events(gemini_session, websocket)
+                # Start concurrent send/receive loops
+                run_task = asyncio.create_task(gemini_session.run())
+                # Start output drainer → frontend
+                output_task = asyncio.create_task(
+                    _drain_output(gemini_session, websocket)
                 )
                 await websocket.send_text(
                     ServerEnvelope(
@@ -111,25 +115,25 @@ async def live_session(websocket: WebSocket) -> None:
                 )
                 continue
 
+            # All enqueue calls are non-blocking → event loop stays free
             if envelope.type == "input.text":
                 text = envelope.data.get("text", "").strip()
                 if text:
-                    await gemini_session.send_text(text)
+                    logger.info(f"Enqueuing text: {text[:50]}")
+                    await gemini_session.enqueue_text(text)
                 continue
 
             if envelope.type == "input.audio":
                 audio_base64 = envelope.data.get("audio_base64", "")
                 if audio_base64:
-                    await gemini_session.send_audio_chunk(base64.b64decode(audio_base64))
-                if envelope.data.get("end_of_stream"):
-                    await gemini_session.finish_audio()
+                    gemini_session.enqueue_audio(base64.b64decode(audio_base64))
                 continue
 
             if envelope.type == "input.image":
                 image_base64 = envelope.data.get("image_base64", "")
                 mime_type = envelope.data.get("mime_type", "image/jpeg")
                 if image_base64:
-                    await gemini_session.send_image_chunk(
+                    gemini_session.enqueue_image(
                         base64.b64decode(image_base64), mime_type=mime_type
                     )
                 continue
@@ -149,21 +153,41 @@ async def live_session(websocket: WebSocket) -> None:
                 ).model_dump_json()
             )
     finally:
-        if session_task is not None:
-            session_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await session_task
         if gemini_session is not None:
             await gemini_session.close()
+        if run_task is not None:
+            run_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await run_task
+        if output_task is not None:
+            output_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await output_task
         with suppress(RuntimeError):
             await websocket.close()
 
 
-async def _stream_gemini_events(
+async def _drain_output(
     gemini_session: GeminiLiveSession, websocket: WebSocket
 ) -> None:
-    async for event in gemini_session.receive():
-        await websocket.send_text(json.dumps(event))
+    """Drain output_queue from Gemini → send to frontend via websocket."""
+    from .gemini_live import _STOP
+    audio_events = 0
+    try:
+        while True:
+            event = await gemini_session.output_queue.get()
+            if event is _STOP:
+                break
+            etype = event.get("type", "")
+            if etype == "output.audio":
+                audio_events += 1
+                if audio_events % 10 == 1:
+                    logger.info(f"Streaming audio to frontend (event #{audio_events})")
+            else:
+                logger.info(f"Gemini → frontend: {etype}")
+            await websocket.send_text(json.dumps(event))
+    except Exception as exc:
+        logger.error(f"Output drain error: {exc}")
 
 
 if __name__ == "__main__":
