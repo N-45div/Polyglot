@@ -8,7 +8,7 @@ Deep dive into how Polyglot achieves real-time, bidirectional voice conversation
 flowchart TB
     subgraph Client["Browser (Next.js)"]
         direction TB
-        A1["getUserMedia()"] -->|Raw PCM 48kHz| A2["Downsampler\n48kHz → 16kHz"]
+        A1["getUserMedia()"] -->|Raw PCM 48kHz| A2["Downsampler\n48kHz to 16kHz"]
         A2 -->|PCM 16-bit mono| A3["Audio Buffer\n250ms chunks"]
         A3 -->|base64 JSON| WS_C["WebSocket Client"]
         
@@ -69,29 +69,26 @@ sequenceDiagram
     participant BE as Backend
     participant GEM as Gemini Live
 
-    Note over Mic,FE: AudioContext at native rate (usually 48kHz)
-    Mic->>FE: Raw PCM float32 (4096 samples/frame)
-    FE->>FE: Downsample 48kHz → 16kHz (linear interpolation)
-    FE->>FE: Convert float32 → int16 PCM
-    FE->>FE: Buffer chunks (250ms interval)
-    FE->>WS: JSON { type: "input.audio", data: { audio_base64 } }
-    WS->>BE: Decode base64 → raw bytes
-    BE->>BE: Enqueue to audio_queue (drop oldest if full)
-    BE->>GEM: send_realtime_input(audio=Blob(data, "audio/pcm;rate=16000"))
-    
+    Note over Mic: AudioContext at native rate 48kHz
+    Mic->>FE: Raw PCM float32 4096 samples per frame
+    FE->>FE: Downsample 48kHz to 16kHz
+    FE->>FE: Convert float32 to int16 PCM
+    FE->>FE: Buffer chunks at 250ms interval
+    FE->>WS: JSON input.audio with audio_base64
+    WS->>BE: Decode base64 to raw bytes
+    BE->>BE: Enqueue to audio_queue
+    BE->>GEM: send_realtime_input audio Blob
     Note over GEM: Server-side VAD detects speech end
-    
-    GEM->>BE: server_content.model_turn.parts[].inline_data (raw PCM 24kHz)
-    BE->>BE: PCM → WAV (add 44-byte header, 24kHz/16-bit/mono)
+    GEM->>BE: model_turn inline_data raw PCM 24kHz
+    BE->>BE: PCM to WAV with 44-byte header
     BE->>BE: base64 encode WAV
-    BE->>WS: JSON { type: "output.audio", data: { audio_base64 } }
-    WS->>FE: Parse JSON, push to audioQ
-    FE->>FE: new Audio("data:audio/wav;base64,...").play()
-    
+    BE->>WS: JSON output.audio with audio_base64
+    WS->>FE: Parse JSON and push to audioQ
+    FE->>FE: Play audio via new Audio data URL
     Note over GEM: If user speaks during playback
-    GEM->>BE: server_content.interrupted = true
-    BE->>WS: { type: "interrupted" }
-    WS->>FE: Clear audioQ, stop current playback
+    GEM->>BE: server_content.interrupted is true
+    BE->>WS: Send interrupted event
+    WS->>FE: Clear audioQ and stop playback
 ```
 
 ## Smart Screen Capture
@@ -105,8 +102,8 @@ flowchart TD
     B -->|Yes| C["Draw video frame\nto 64×64 canvas"]
     C --> D["getImageData()\nread pixel values"]
     D --> E{"Compare with\nprevious frame"}
-    E -->|"Sum of diffs > threshold"| F["CHANGED: Capture full\n1024px JPEG frame"]
-    E -->|"Below threshold"| G{"Last send\n> 10 seconds?"}
+    E -->|Significant change| F["CHANGED: Capture full\n1024px JPEG frame"]
+    E -->|Below threshold| G{"Last send\nover 10 seconds?"}
     G -->|Yes| H["HEARTBEAT: Capture\nfull frame anyway"]
     G -->|No| A
     F --> I["Send to Gemini via\ninput.image WebSocket msg"]
