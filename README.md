@@ -123,7 +123,7 @@ gcloud run deploy polyglot-frontend --image=... --region=us-east1 --allow-unauth
 ## Tech Stack
 
 - **Gemini Live API** — Native audio streaming with `gemini-live-2.5-flash-native-audio`
-- **Google GenAI SDK** — Python SDK v1.67+ with `send_realtime_input()`
+- **Google GenAI SDK** — Python SDK v1.67 with `send_realtime_input()`
 - **FastAPI** — Async WebSocket server with concurrent queue architecture
 - **Next.js 16** — React frontend with Tailwind CSS v4
 - **Cloud Run** — Serverless deployment with WebSocket support
