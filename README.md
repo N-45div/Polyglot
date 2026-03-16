@@ -49,7 +49,7 @@ graph LR
 
 | Feature | Implementation |
 |---|---|
-| **Bidirectional Audio** | `send_realtime_input()` via Google GenAI SDK 1.67+ with asyncio queue-based concurrency |
+| **Bidirectional Audio** | `send_realtime_input()` via Google GenAI SDK 1.67 with asyncio queue-based concurrency |
 | **Server-side VAD** | Gemini's built-in voice activity detection handles turn-taking naturally |
 | **Smart Screen Capture** | Pixel-diff change detection (64×64 thumbnail sampling) — only sends frames when content actually changes |
 | **Multi-turn Conversations** | Persistent `session.receive()` loop across turns with interrupt handling |
